@@ -52,8 +52,15 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <cstdlib>
 #if defined(_MSC_VER)
 #include <intrin.h>
-#elif defined(HAVE_GCC_GET_CPUID) && defined(USE_GCC_GET_CPUID)
+#elif (defined(HAVE_GCC_GET_CPUID) && defined(USE_GCC_GET_CPUID)) || defined(__FILC__)
 #include <cpuid.h>
+#endif
+#if defined(__loongarch__) && defined(__linux__)
+  #include <sys/auxv.h>
+#endif
+
+#ifdef __FILC__
+#include <stdfil.h>
 #endif
 
 namespace simdjson {
@@ -106,7 +113,7 @@ static inline void cpuid(uint32_t *eax, uint32_t *ebx, uint32_t *ecx,
   *ebx = cpu_info[1];
   *ecx = cpu_info[2];
   *edx = cpu_info[3];
-#elif defined(HAVE_GCC_GET_CPUID) && defined(USE_GCC_GET_CPUID)
+#elif (defined(HAVE_GCC_GET_CPUID) && defined(USE_GCC_GET_CPUID)) || defined(__FILC__)
   uint32_t level = *eax;
   __get_cpuid(level, eax, ebx, ecx, edx);
 #else
@@ -123,6 +130,8 @@ static inline void cpuid(uint32_t *eax, uint32_t *ebx, uint32_t *ecx,
 static inline uint64_t xgetbv() {
 #if defined(_MSC_VER)
   return _xgetbv(0);
+#elif defined(__FILC__)
+  return zxgetbv();
 #else
   uint32_t xcr0_lo, xcr0_hi;
   asm volatile("xgetbv\n\t" : "=a" (xcr0_lo), "=d" (xcr0_hi) : "c" (0));
@@ -219,16 +228,31 @@ static inline uint32_t detect_supported_architectures() {
   return host_isa;
 }
 
-#elif defined(__loongarch_sx) && !defined(__loongarch_asx)
+#elif defined(__loongarch__)
 
 static inline uint32_t detect_supported_architectures() {
-  return instruction_set::LSX;
+  uint32_t host_isa = instruction_set::DEFAULT;
+  #if defined(__linux__)
+  uint64_t hwcap = 0;
+  hwcap = getauxval(AT_HWCAP);
+  if (hwcap & HWCAP_LOONGARCH_LSX) {
+    host_isa |= instruction_set::LSX;
+  }
+  if (hwcap & HWCAP_LOONGARCH_LASX) {
+    host_isa |= instruction_set::LASX;
+  }
+  #endif
+  return host_isa;
 }
 
-#elif defined(__loongarch_asx)
+#elif SIMDJSON_IS_RISCV64
 
 static inline uint32_t detect_supported_architectures() {
-  return instruction_set::LASX;
+  uint32_t host_isa = instruction_set::DEFAULT;
+#if SIMDJSON_IS_RVV_VLS
+  host_isa |= instruction_set::RVV_VLS;
+#endif
+  return host_isa;
 }
 
 #else // fallback

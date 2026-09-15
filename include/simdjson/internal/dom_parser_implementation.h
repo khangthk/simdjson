@@ -19,7 +19,12 @@ class document;
 * 3) The stream_final mode allows us to truncate final
 * unterminated strings. It is useful in conjunction with streaming_partial.
 */
-enum class stage1_mode { regular, streaming_partial, streaming_final};
+enum class stage1_mode {
+  regular,
+  streaming_partial, streaming_final,
+  json_sequence_partial, json_sequence_final,
+  comma_delimited_partial, comma_delimited_final
+};
 
 /**
  * Returns true if mode == streaming_partial or mode == streaming_final
@@ -30,7 +35,6 @@ inline bool is_streaming(stage1_mode mode) {
   return (mode != stage1_mode::regular);
   // return (mode == stage1_mode::streaming_partial || mode == stage1_mode::streaming_final);
 }
-
 
 namespace internal {
 
@@ -211,6 +215,22 @@ protected:
    * Defaults to DEFAULT_MAX_DEPTH.
    */
   size_t _max_depth{0};
+
+public:
+  /** Whether to store big integers as strings instead of returning BIGINT_ERROR */
+  bool _number_as_string{false};
+
+  /**
+   * Whether the input buffer passed to parse() is *not* padded to len +
+   * SIMDJSON_PADDING bytes. When true, stage 2 string parsing avoids reading
+   * past buf+len (it finishes the final, near-the-end bytes from a small padded
+   * scratch buffer). This is set only by the no-padding DOM parse entry points
+   * (dom::parser::parse_unpadded); the default padded fast path leaves it false
+   * and is unaffected.
+   */
+  bool _unpadded{false};
+
+protected:
 
   // Declaring these so that subclasses can use them to implement their constructors.
   simdjson_inline dom_parser_implementation() noexcept;

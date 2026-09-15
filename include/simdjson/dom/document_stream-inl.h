@@ -89,12 +89,14 @@ simdjson_inline document_stream::document_stream(
   dom::parser &_parser,
   const uint8_t *_buf,
   size_t _len,
-  size_t _batch_size
+  size_t _batch_size,
+  stream_format _format
 ) noexcept
   : parser{&_parser},
     buf{_buf},
     len{_len},
     batch_size{_batch_size <= MINIMAL_BATCH_SIZE ? MINIMAL_BATCH_SIZE : _batch_size},
+    format{_format},
     error{SUCCESS}
 #ifdef SIMDJSON_THREADS_ENABLED
     , use_thread(_parser.threaded) // we need to make a copy because _parser.threaded can change
@@ -112,6 +114,7 @@ simdjson_inline document_stream::document_stream() noexcept
     buf{nullptr},
     len{0},
     batch_size{0},
+    format{stream_format::whitespace_delimited},
     error{UNINITIALIZED}
 #ifdef SIMDJSON_THREADS_ENABLED
     , use_thread(false)
@@ -217,6 +220,9 @@ simdjson_inline size_t document_stream::iterator::current_index() const noexcept
 
 simdjson_inline std::string_view document_stream::iterator::source() const noexcept {
   const char* start = reinterpret_cast<const char*>(stream->buf) + current_index();
+  if (stream->error) {
+    return std::string_view(start, stream->len - current_index());
+  }
   bool object_or_array = ((*start == '[') || (*start == '{'));
   if(object_or_array) {
     size_t next_doc_index = stream->batch_start + stream->parser->implementation->structural_indexes[stream->parser->implementation->next_structural_index - 1];
@@ -224,7 +230,14 @@ simdjson_inline std::string_view document_stream::iterator::source() const noexc
   } else {
     size_t next_doc_index = stream->batch_start + stream->parser->implementation->structural_indexes[stream->parser->implementation->next_structural_index];
     size_t svlen = next_doc_index - current_index();
-    while(svlen > 1 && (std::isspace(start[svlen-1]) || start[svlen-1] == '\0')) {
+    // Trim trailing whitespace, NUL, and RS (0x1E). In RFC 7464 json_sequence
+    // mode the scanner classifies RS as a scalar character, so an RS-prefixed
+    // scalar document (number/true/false/null/string) has no closing structural
+    // index and the slice runs all the way up to the next document's RS. RS
+    // cannot legally appear in a JSON value at the source level (control
+    // characters in strings must be escaped as \u001E), so stripping it is
+    // safe in every stream_format.
+    while(svlen > 1 && (std::isspace(static_cast<unsigned char>(start[svlen-1])) || start[svlen-1] == '\0' || static_cast<uint8_t>(start[svlen-1]) == 0x1E || (stream->format == stream_format::comma_delimited && start[svlen-1] == ','))) {
       svlen--;
     }
     return std::string_view(start, svlen);
@@ -274,10 +287,35 @@ inline size_t document_stream::next_batch_start() const noexcept {
 
 inline error_code document_stream::run_stage1(dom::parser &p, size_t _batch_start) noexcept {
   size_t remaining = len - _batch_start;
+  stage1_mode mode;
   if (remaining <= batch_size) {
-    return p.implementation->stage1(&buf[_batch_start], remaining, stage1_mode::streaming_final);
+    // Final batch
+    switch (format) {
+      case stream_format::json_sequence:
+        mode = stage1_mode::json_sequence_final;
+        break;
+      case stream_format::comma_delimited:
+        mode = stage1_mode::comma_delimited_final;
+        break;
+      default:
+        mode = stage1_mode::streaming_final;
+        break;
+    }
+    return p.implementation->stage1(&buf[_batch_start], remaining, mode);
   } else {
-    return p.implementation->stage1(&buf[_batch_start], batch_size, stage1_mode::streaming_partial);
+    // Partial batch
+    switch (format) {
+      case stream_format::json_sequence:
+        mode = stage1_mode::json_sequence_partial;
+        break;
+      case stream_format::comma_delimited:
+        mode = stage1_mode::comma_delimited_partial;
+        break;
+      default:
+        mode = stage1_mode::streaming_partial;
+        break;
+    }
+    return p.implementation->stage1(&buf[_batch_start], batch_size, mode);
   }
 }
 

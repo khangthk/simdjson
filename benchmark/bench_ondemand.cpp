@@ -40,6 +40,7 @@ SIMDJSON_POP_DISABLE_WARNINGS
 #include "json2msgpack/boostjson.h"
 
 #include "partial_tweets/simdjson_ondemand.h"
+#include "partial_tweets/simdjson_ondemand_key_selector.h"
 #include "partial_tweets/simdjson_dom.h"
 #include "partial_tweets/yyjson.h"
 #if SIMDJSON_COMPETITION_ONDEMAND_SAJSON
@@ -124,6 +125,7 @@ SIMDJSON_POP_DISABLE_WARNINGS
 #include "kostya/boostjson.h"
 
 #include "large_random/simdjson_ondemand.h"
+#include "large_random/simdjson_ondemand_ranges.h"
 #if SIMDJSON_COMPETITION_ONDEMAND_UNORDERED
 #include "large_random/simdjson_ondemand_unordered.h"
 #endif // SIMDJSON_COMPETITION_ONDEMAND_UNORDERED
@@ -147,5 +149,10 @@ SIMDJSON_POP_DISABLE_WARNINGS
 
 #include "large_amazon_cellphones/simdjson_dom.h"
 #include "large_amazon_cellphones/simdjson_ondemand.h"
+
+#include "accessor_performance/runtime_accessors.h"
+#if SIMDJSON_STATIC_REFLECTION
+#include "accessor_performance/compile_time_accessors.h"
+#endif
 
 BENCHMARK_MAIN();

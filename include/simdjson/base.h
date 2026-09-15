@@ -9,6 +9,8 @@
 #include "simdjson/compiler_check.h"
 #include "simdjson/error.h"
 #include "simdjson/portability.h"
+#include "simdjson/concepts.h"
+#include "simdjson/constevalutil.h"
 
 /**
  * @brief The top level simdjson namespace, containing everything the library provides.
@@ -19,6 +21,10 @@ SIMDJSON_PUSH_DISABLE_UNUSED_WARNINGS
 
 /** The maximum document size supported by simdjson. */
 constexpr size_t SIMDJSON_MAXSIZE_BYTES = 0xFFFFFFFF;
+/** The maximum depth of nested objects and arrays supported by simdjson.
+ A depth of SIMDJSON_MAXSIZE_BYTES/2 is not reasonable and would be
+ adversarial, but it serves as an upper bound for validation purposes. */
+constexpr size_t SIMDJSON_MAX_DEPTH = SIMDJSON_MAXSIZE_BYTES/2;
 
 /**
  * The amount of padding needed in a buffer to parse JSON.
@@ -43,6 +49,30 @@ class implementation;
 struct padded_string;
 class padded_string_view;
 enum class stage1_mode;
+
+/**
+ * Stream format for parse_many/iterate_many.
+ */
+enum class stream_format {
+  whitespace_delimited, ///< Whitespace-delimited JSON documents (default, includes NDJSON/JSONL)
+  json_sequence,        ///< RFC 7464 JSON text sequences (RS-delimited)
+  comma_delimited,      ///< Comma-separated JSON documents (e.g., `{...},{...},{...}`)
+  comma_delimited_array,///< A single JSON array whose elements are iterated as
+                        ///< comma-separated documents (e.g., `[{...},{...},{...}]`).
+                        ///< The parser strips the outer `[` / `]` plus any
+                        ///< surrounding JSON whitespace (space, tab, LF, CR)
+                        ///< and then behaves like `comma_delimited` over the
+                        ///< remaining bytes.
+  newline_delimited     ///< NDJSON/JSON Lines where each document occupies exactly
+                        ///< one line: documents are separated by line feeds and no
+                        ///< document contains a raw line feed. Same inputs as
+                        ///< `whitespace_delimited`, but the stronger guarantee lets
+                        ///< the parser find the end of a document without walking
+                        ///< it. On ondemand `iterate_many`, an unread remainder may
+                        ///< be skipped by jumping to the next line feed without
+                        ///< structure-validating that remainder. Use
+                        ///< `whitespace_delimited` if unsure.
+};
 
 namespace internal {
 

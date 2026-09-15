@@ -23,11 +23,14 @@ simdjson_inline parser::parser(size_t max_capacity) noexcept
 
 simdjson_warn_unused simdjson_inline error_code parser::allocate(size_t new_capacity, size_t new_max_depth) noexcept {
   if (new_capacity > max_capacity()) { return CAPACITY; }
-  if (string_buf && new_capacity == capacity() && new_max_depth == max_depth()) { return SUCCESS; }
+  if (string_buf && new_capacity <= capacity() && new_max_depth <= max_depth()) { return SUCCESS; }
 
   // string_capacity copied from document::allocate
   _capacity = 0;
-  size_t string_capacity = SIMDJSON_ROUNDUP_N(5 * new_capacity / 3 + SIMDJSON_PADDING, 64);
+  if(5 * (new_capacity / 3) + SIMDJSON_PADDING < SIMDJSON_PADDING) {
+    return CAPACITY; // overflow, only happen on legacy 32-bit systems with very large capacity
+  }
+  size_t string_capacity = SIMDJSON_ROUNDUP_N(5 * (new_capacity / 3) + SIMDJSON_PADDING, 64);
   string_buf.reset(new (std::nothrow) uint8_t[string_capacity]);
 #if SIMDJSON_DEVELOPMENT_CHECKS
   start_positions.reset(new (std::nothrow) token_position[new_max_depth]);
@@ -49,9 +52,10 @@ simdjson_inline simdjson_warn_unused bool parser::string_buffer_overflow(const u
 #endif
 
 simdjson_warn_unused simdjson_inline simdjson_result<document> parser::iterate(padded_string_view json) & noexcept {
-  if (json.padding() < SIMDJSON_PADDING) { return INSUFFICIENT_PADDING; }
+  if (!json.has_sufficient_padding()) { return INSUFFICIENT_PADDING; }
 
   json.remove_utf8_bom();
+  _document_len = json.length();
 
   // Allocate if needed
   if (capacity() < json.length() || !string_buf) {
@@ -65,9 +69,10 @@ simdjson_warn_unused simdjson_inline simdjson_result<document> parser::iterate(p
 
 #ifdef SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON
 simdjson_warn_unused simdjson_inline simdjson_result<document> parser::iterate_allow_incomplete_json(padded_string_view json) & noexcept {
-  if (json.padding() < SIMDJSON_PADDING) { return INSUFFICIENT_PADDING; }
+  if (!json.has_sufficient_padding()) { return INSUFFICIENT_PADDING; }
 
   json.remove_utf8_bom();
+  _document_len = json.length();
 
   // Allocate if needed
   if (capacity() < json.length() || !string_buf) {
@@ -97,10 +102,7 @@ simdjson_warn_unused simdjson_inline simdjson_result<document> parser::iterate(s
 }
 
 simdjson_warn_unused simdjson_inline simdjson_result<document> parser::iterate(std::string &json) & noexcept {
-  if(json.capacity() - json.size() < SIMDJSON_PADDING) {
-    json.reserve(json.size() + SIMDJSON_PADDING);
-  }
-  return iterate(padded_string_view(json));
+  return iterate(pad_with_reserve(json));
 }
 
 simdjson_warn_unused simdjson_inline simdjson_result<document> parser::iterate(const std::string &json) & noexcept {
@@ -122,7 +124,7 @@ simdjson_warn_unused simdjson_inline simdjson_result<document> parser::iterate(c
 }
 
 simdjson_warn_unused simdjson_inline simdjson_result<json_iterator> parser::iterate_raw(padded_string_view json) & noexcept {
-  if (json.padding() < SIMDJSON_PADDING) { return INSUFFICIENT_PADDING; }
+  if (!json.has_sufficient_padding()) { return INSUFFICIENT_PADDING; }
 
   json.remove_utf8_bom();
 
@@ -136,25 +138,107 @@ simdjson_warn_unused simdjson_inline simdjson_result<json_iterator> parser::iter
   return json_iterator(reinterpret_cast<const uint8_t *>(json.data()), this);
 }
 
-inline simdjson_result<document_stream> parser::iterate_many(const uint8_t *buf, size_t len, size_t batch_size, bool allow_comma_separated) noexcept {
+inline simdjson_result<document_stream> parser::iterate_many(const uint8_t *buf, size_t len, size_t batch_size) noexcept {
   if(batch_size < MINIMAL_BATCH_SIZE) { batch_size = MINIMAL_BATCH_SIZE; }
   if((len >= 3) && (std::memcmp(buf, "\xEF\xBB\xBF", 3) == 0)) {
     buf += 3;
     len -= 3;
   }
-  if(allow_comma_separated && batch_size < len) { batch_size = len; }
-  return document_stream(*this, buf, len, batch_size, allow_comma_separated);
+  return document_stream(*this, buf, len, batch_size, false, stream_format::whitespace_delimited);
 }
+inline simdjson_result<document_stream> parser::iterate_many(const char *buf, size_t len, size_t batch_size) noexcept {
+  return iterate_many(reinterpret_cast<const uint8_t *>(buf), len, batch_size);
+}
+inline simdjson_result<document_stream> parser::iterate_many(padded_string_view s, size_t batch_size) noexcept {
+  if (!s.has_sufficient_padding()) { return INSUFFICIENT_PADDING; }
+  return iterate_many(s.data(), s.length(), batch_size);
+}
+inline simdjson_result<document_stream> parser::iterate_many(const padded_string &s, size_t batch_size) noexcept {
+  return iterate_many(padded_string_view(s), batch_size);
+}
+inline simdjson_result<document_stream> parser::iterate_many(const std::string &s, size_t batch_size) noexcept {
+  return iterate_many(padded_string_view(s), batch_size);
+}
+inline simdjson_result<document_stream> parser::iterate_many(std::string &s, size_t batch_size) noexcept {
+  return iterate_many(pad(s), batch_size);
+}
+
+#ifndef SIMDJSON_DISABLE_DEPRECATED_API
+SIMDJSON_PUSH_DISABLE_WARNINGS
+SIMDJSON_DISABLE_DEPRECATED_WARNING
+inline simdjson_result<document_stream> parser::iterate_many(const uint8_t *buf, size_t len, size_t batch_size, bool allow_comma_separated) noexcept {
+  // Warning: no check is done on the buffer padding. We trust the user.
+  if(batch_size < MINIMAL_BATCH_SIZE) { batch_size = MINIMAL_BATCH_SIZE; }
+  if((len >= 3) && (std::memcmp(buf, "\xEF\xBB\xBF", 3) == 0)) {
+    buf += 3;
+    len -= 3;
+  }
+  // Map allow_comma_separated to stream_format::comma_delimited
+  if (allow_comma_separated) {
+    return document_stream(*this, buf, len, batch_size, false, stream_format::comma_delimited);
+  }
+  return document_stream(*this, buf, len, batch_size, false, stream_format::whitespace_delimited);
+}
+
 inline simdjson_result<document_stream> parser::iterate_many(const char *buf, size_t len, size_t batch_size, bool allow_comma_separated) noexcept {
+  // Warning: no check is done on the buffer padding. We trust the user.
   return iterate_many(reinterpret_cast<const uint8_t *>(buf), len, batch_size, allow_comma_separated);
 }
-inline simdjson_result<document_stream> parser::iterate_many(const std::string &s, size_t batch_size, bool allow_comma_separated) noexcept {
+inline simdjson_result<document_stream> parser::iterate_many(padded_string_view s, size_t batch_size, bool allow_comma_separated) noexcept {
+  if (!s.has_sufficient_padding()) { return INSUFFICIENT_PADDING; }
   return iterate_many(s.data(), s.length(), batch_size, allow_comma_separated);
 }
 inline simdjson_result<document_stream> parser::iterate_many(const padded_string &s, size_t batch_size, bool allow_comma_separated) noexcept {
-  return iterate_many(s.data(), s.length(), batch_size, allow_comma_separated);
+  return iterate_many(padded_string_view(s), batch_size, allow_comma_separated);
 }
+inline simdjson_result<document_stream> parser::iterate_many(const std::string &s, size_t batch_size, bool allow_comma_separated) noexcept {
+  return iterate_many(padded_string_view(s), batch_size, allow_comma_separated);
+}
+inline simdjson_result<document_stream> parser::iterate_many(std::string &s, size_t batch_size, bool allow_comma_separated) noexcept {
+  return iterate_many(pad(s), batch_size, allow_comma_separated);
+}
+SIMDJSON_POP_DISABLE_WARNINGS
+#endif // SIMDJSON_DISABLE_DEPRECATED_API
 
+inline simdjson_result<document_stream> parser::iterate_many(const uint8_t *buf, size_t len, size_t batch_size, stream_format format) noexcept {
+  if(batch_size < MINIMAL_BATCH_SIZE) { batch_size = MINIMAL_BATCH_SIZE; }
+  if((len >= 3) && (std::memcmp(buf, "\xEF\xBB\xBF", 3) == 0)) {
+    buf += 3;
+    len -= 3;
+  }
+  if (format == stream_format::comma_delimited_array) {
+    // Strip leading JSON whitespace.
+    while (len > 0 && (buf[0] == ' ' || buf[0] == '\t' || buf[0] == '\n' || buf[0] == '\r')) {
+      buf++; len--;
+    }
+    // Expect the opening '['.
+    if (len == 0 || buf[0] != '[') { return TAPE_ERROR; }
+    buf++; len--;
+    // Strip trailing JSON whitespace.
+    while (len > 0 && (buf[len-1] == ' ' || buf[len-1] == '\t' || buf[len-1] == '\n' || buf[len-1] == '\r')) {
+      len--;
+    }
+    // Expect the closing ']'.
+    if (len == 0 || buf[len-1] != ']') { return TAPE_ERROR; }
+    len--;
+    // Fall through to comma_delimited over the array contents.
+    format = stream_format::comma_delimited;
+  }
+  return document_stream(*this, buf, len, batch_size, false, format);
+}
+inline simdjson_result<document_stream> parser::iterate_many(const char *buf, size_t len, size_t batch_size, stream_format format) noexcept {
+  return iterate_many(reinterpret_cast<const uint8_t *>(buf), len, batch_size, format);
+}
+inline simdjson_result<document_stream> parser::iterate_many(padded_string_view s, size_t batch_size, stream_format format) noexcept {
+  if (!s.has_sufficient_padding()) { return INSUFFICIENT_PADDING; }
+  return iterate_many(s.data(), s.length(), batch_size, format);
+}
+inline simdjson_result<document_stream> parser::iterate_many(const std::string &s, size_t batch_size, stream_format format) noexcept {
+  return iterate_many(padded_string_view(s), batch_size, format);
+}
+inline simdjson_result<document_stream> parser::iterate_many(const padded_string &s, size_t batch_size, stream_format format) noexcept {
+  return iterate_many(padded_string_view(s), batch_size, format);
+}
 simdjson_pure simdjson_inline size_t parser::capacity() const noexcept {
   return _capacity;
 }
@@ -166,7 +250,7 @@ simdjson_pure simdjson_inline size_t parser::max_depth() const noexcept {
 }
 
 simdjson_inline void parser::set_max_capacity(size_t max_capacity) noexcept {
-  if(max_capacity < dom::MINIMAL_DOCUMENT_CAPACITY) {
+  if(max_capacity > dom::MINIMAL_DOCUMENT_CAPACITY) {
     _max_capacity = max_capacity;
   } else {
     _max_capacity = dom::MINIMAL_DOCUMENT_CAPACITY;
@@ -188,6 +272,34 @@ simdjson_inline simdjson_warn_unused simdjson_result<std::string_view> parser::u
   dst = end;
   return result;
 }
+
+simdjson_inline simdjson_warn_unused ondemand::parser& parser::get_parser() {
+  return *parser::get_parser_instance();
+}
+
+simdjson_inline bool parser::release_parser() {
+  auto &parser_instance = parser::get_threadlocal_parser_if_exists();
+  if (parser_instance) {
+    parser_instance.reset();
+    return true;
+  }
+  return false;
+}
+
+simdjson_inline simdjson_warn_unused std::unique_ptr<ondemand::parser>& parser::get_parser_instance() {
+  std::unique_ptr<ondemand::parser>& parser_instance = get_threadlocal_parser_if_exists();
+  if (!parser_instance) {
+    parser_instance.reset(new ondemand::parser());
+  }
+  return parser_instance;
+}
+
+simdjson_inline simdjson_warn_unused std::unique_ptr<ondemand::parser>& parser::get_threadlocal_parser_if_exists() {
+  // @the-moisrex points out that this could be implemented with std::optional (C++17).
+  thread_local std::unique_ptr<ondemand::parser> parser_instance = nullptr;
+  return parser_instance;
+}
+
 
 } // namespace ondemand
 } // namespace SIMDJSON_IMPLEMENTATION

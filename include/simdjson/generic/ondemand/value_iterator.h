@@ -125,7 +125,8 @@ public:
    *
    * @returns Whether the object had any fields (returns false for empty).
    * @error INCOMPLETE_ARRAY_OR_OBJECT If there are no more tokens (implying the *parent*
-   *        array or object is incomplete).
+   *        array or object is incomplete). An INCOMPLETE_ARRAY_OR_OBJECT is an unrecoverable error that
+   *        invalidates the document.
    */
   simdjson_warn_unused simdjson_inline simdjson_result<bool> started_object() noexcept;
   /**
@@ -135,7 +136,8 @@ public:
    *
    * @returns Whether the object had any fields (returns false for empty).
    * @error INCOMPLETE_ARRAY_OR_OBJECT If there are no more tokens (implying the *parent*
-   *        array or object is incomplete).
+   *        array or object is incomplete). An INCOMPLETE_ARRAY_OR_OBJECT is an unrecoverable error that
+   *        invalidates the document.
    */
   simdjson_warn_unused simdjson_inline simdjson_result<bool> started_root_object() noexcept;
 
@@ -155,6 +157,17 @@ public:
    * Get the current field's key.
    */
   simdjson_warn_unused simdjson_inline simdjson_result<raw_json_string> field_key() noexcept;
+
+  /**
+   * Get the current field's key together with its raw byte length.
+   *
+   * Like field_key(), but also returns the number of raw key bytes (the distance
+   * from the first key byte to the closing quote). The length is recovered from
+   * the structural index -- the next structural token is the ':' -- by stepping
+   * back over any whitespace to the closing quote, avoiding a forward SIMD scan
+   * for the closing quote. Leaves the iterator positioned exactly as field_key().
+   */
+  simdjson_warn_unused simdjson_inline error_code field_key_with_length(raw_json_string &key, std::size_t &len) noexcept;
 
   /**
    * Pass the : in the field and move to its value.
@@ -257,7 +270,8 @@ public:
    *
    * @returns Whether the array had any elements (returns false for empty).
    * @error INCOMPLETE_ARRAY_OR_OBJECT If there are no more tokens (implying the *parent*
-   *        array or object is incomplete).
+   *        array or object is incomplete). An INCOMPLETE_ARRAY_OR_OBJECT is an unrecoverable error that
+   *        invalidates the document.
    */
   simdjson_warn_unused simdjson_inline simdjson_result<bool> started_array() noexcept;
   /**
@@ -267,7 +281,8 @@ public:
    *
    * @returns Whether the array had any elements (returns false for empty).
    * @error INCOMPLETE_ARRAY_OR_OBJECT If there are no more tokens (implying the *parent*
-   *        array or object is incomplete).
+   *        array or object is incomplete). An INCOMPLETE_ARRAY_OR_OBJECT is an unrecoverable error that
+   *        invalidates the document.
    */
   simdjson_warn_unused simdjson_inline simdjson_result<bool> started_root_array() noexcept;
 
@@ -306,6 +321,8 @@ public:
   simdjson_warn_unused simdjson_inline simdjson_result<int64_t> get_int64_in_string() noexcept;
   simdjson_warn_unused simdjson_inline simdjson_result<double> get_double() noexcept;
   simdjson_warn_unused simdjson_inline simdjson_result<double> get_double_in_string() noexcept;
+  simdjson_warn_unused simdjson_inline simdjson_result<float> get_float() noexcept;
+  simdjson_warn_unused simdjson_inline simdjson_result<float> get_float_in_string() noexcept;
   simdjson_warn_unused simdjson_inline simdjson_result<bool> get_bool() noexcept;
   simdjson_warn_unused simdjson_inline simdjson_result<bool> is_null() noexcept;
   simdjson_warn_unused simdjson_inline bool is_negative() noexcept;
@@ -324,6 +341,8 @@ public:
   simdjson_warn_unused simdjson_inline simdjson_result<int64_t> get_root_int64_in_string(bool check_trailing) noexcept;
   simdjson_warn_unused simdjson_inline simdjson_result<double> get_root_double(bool check_trailing) noexcept;
   simdjson_warn_unused simdjson_inline simdjson_result<double> get_root_double_in_string(bool check_trailing) noexcept;
+  simdjson_warn_unused simdjson_inline simdjson_result<float> get_root_float(bool check_trailing) noexcept;
+  simdjson_warn_unused simdjson_inline simdjson_result<float> get_root_float_in_string(bool check_trailing) noexcept;
   simdjson_warn_unused simdjson_inline simdjson_result<bool> get_root_bool(bool check_trailing) noexcept;
   simdjson_warn_unused simdjson_inline bool is_root_negative() noexcept;
   simdjson_warn_unused simdjson_inline simdjson_result<bool> is_root_integer(bool check_trailing) noexcept;
@@ -331,7 +350,7 @@ public:
   simdjson_warn_unused simdjson_inline simdjson_result<number> get_root_number(bool check_trailing) noexcept;
   simdjson_warn_unused simdjson_inline simdjson_result<bool> is_root_null(bool check_trailing) noexcept;
 
-  simdjson_inline error_code error() const noexcept;
+  simdjson_warn_unused simdjson_inline error_code error() const noexcept;
   simdjson_inline uint8_t *&string_buf_loc() noexcept;
   simdjson_inline const json_iterator &json_iter() const noexcept;
   simdjson_inline json_iterator &json_iter() noexcept;
@@ -415,8 +434,8 @@ protected:
   simdjson_inline const uint8_t *peek_non_root_scalar(const char *type) noexcept;
 
 
-  simdjson_inline error_code start_container(uint8_t start_char, const char *incorrect_type_message, const char *type) noexcept;
-  simdjson_inline error_code end_container() noexcept;
+  simdjson_warn_unused simdjson_inline error_code start_container(uint8_t start_char, const char *incorrect_type_message, const char *type) noexcept;
+  simdjson_warn_unused simdjson_inline error_code end_container() noexcept;
 
   /**
    * Advance to a place expecting a value (increasing depth).
@@ -426,8 +445,8 @@ protected:
    */
   simdjson_inline simdjson_result<const uint8_t *> advance_to_value() noexcept;
 
-  simdjson_inline error_code incorrect_type_error(const char *message) const noexcept;
-  simdjson_inline error_code error_unless_more_tokens(uint32_t tokens=1) const noexcept;
+  simdjson_warn_unused simdjson_inline error_code incorrect_type_error(const char *message) const noexcept;
+  simdjson_warn_unused simdjson_inline error_code error_unless_more_tokens(uint32_t tokens=1) const noexcept;
 
   simdjson_inline bool is_at_start() const noexcept;
   /**
@@ -459,15 +478,25 @@ protected:
 
   /** @copydoc error_code json_iterator::position() const noexcept; */
   simdjson_inline token_position position() const noexcept;
+  /**
+   * Move the live iterator directly to the given position and depth, without
+   * validating against the parser's per-depth container-start bookkeeping
+   * (unlike json_iterator::reenter_child()). Used to restore a previously
+   * captured mid-container position (see object::revert_position()): that
+   * bookkeeping only tracks each container's own start, not every position
+   * a caller might later capture and revert to, so it does not apply here.
+   */
+  simdjson_inline void reenter_at(token_position position, depth_t depth) noexcept;
   /** @copydoc error_code json_iterator::end_position() const noexcept; */
   simdjson_inline token_position last_position() const noexcept;
   /** @copydoc error_code json_iterator::end_position() const noexcept; */
   simdjson_inline token_position end_position() const noexcept;
   /** @copydoc error_code json_iterator::report_error(error_code error, const char *message) noexcept; */
-  simdjson_inline error_code report_error(error_code error, const char *message) noexcept;
+  simdjson_warn_unused simdjson_inline error_code report_error(error_code error, const char *message) noexcept;
 
   friend class document;
   friend class object;
+  friend class object_iterator;
   friend class array;
   friend class value;
   friend class field;

@@ -9,6 +9,9 @@
 #include <memory>
 #include <string>
 #include <ostream>
+#if SIMDJSON_CPLUSPLUS17
+#include <variant>
+#endif
 
 namespace simdjson {
 
@@ -17,7 +20,7 @@ namespace simdjson {
  */
 class padded_string_view : public std::string_view {
 private:
-  size_t _capacity;
+  size_t _capacity{0};
 
 public:
   /** Create an empty padded_string_view. */
@@ -58,6 +61,9 @@ public:
   /** The number of allocated bytes. */
   inline size_t capacity() const noexcept;
 
+  /** check that the view has sufficient padding */
+  inline bool has_sufficient_padding() const noexcept;
+
   /**
    * Remove the UTF-8 Byte Order Mark (BOM) if it exists.
    *
@@ -69,6 +75,68 @@ public:
   inline size_t padding() const noexcept;
 
 }; // padded_string_view
+
+/**
+ * Get the system's memory page size. By default, we return
+ * 4096 bytes, which is the most common page size. On systems
+ * where the page size is not a multiple of 4096 bytes, and not
+ * a unix-like system, nor Windows, this function may return an
+ * incorrect value.
+ *
+ * @return The page size in bytes.
+ */
+inline uint32_t get_page_size() noexcept;
+
+#if SIMDJSON_CPLUSPLUS17
+/**
+ * A padded_input is a wrapper around either a padded_string_view or a padded_string.
+ * It will automatically pad a string_view if it does not have sufficient padding
+ * up to the end of the memory page. Note that a requirement for this method to
+ * make sense is to be on a system with a page size of at least 4096 (which is
+ * universal except on some embedded systems).
+ */
+struct padded_input {
+    /**
+     * Construct a padded_input from a string_view. If the string_view does not have sufficient padding,
+     * the data will be copied into a padded_string and the padded_string_view will point to the
+     * padded_string's data. Otherwise, the padded_string_view will point to the original string_view's data.
+     */
+     inline explicit padded_input(std::string_view sv);
+    /**
+     * Construct a padded_input from a C-style string (length specified). If the string does not have sufficient padding,
+     * the data will be copied into a padded_string and the padded_string_view will point to the
+     * padded_string's data. Otherwise, the padded_string_view will point to the original string's data.
+     */
+     inline explicit padded_input(const char *data, size_t length);
+    /**
+     * Construct a padded_input from a std::string. If the string does not have sufficient padding
+     * (considering its capacity), the data will be copied into a padded_string and the padded_string_view
+     * will point to the padded_string's data. Otherwise, the padded_string_view will point to the
+     * original string's data.
+     */
+     inline explicit padded_input(const std::string &s);
+
+    /**
+     * Check if the padded_input is a view.
+     *
+     * @return true if the padded_input is a view, false otherwise.
+     */
+     inline bool is_view() const noexcept;
+
+    /**
+     * Convert the padded_input to a padded_string_view.
+     *
+     * @return The padded_string_view.
+     */
+     inline operator simdjson::padded_string_view() const noexcept;
+
+private:
+    std::variant<simdjson::padded_string_view, simdjson::padded_string> storage;
+    // whether we cross a page boundary and need to allocate a new padded string.
+    static inline bool needs_allocation(const char* buf, size_t len, size_t padding = SIMDJSON_PADDING) noexcept;
+};
+
+#endif // SIMDJSON_CPLUSPLUS17
 
 #if SIMDJSON_EXCEPTIONS
 /**
@@ -82,6 +150,50 @@ public:
  */
 inline std::ostream& operator<<(std::ostream& out, simdjson_result<padded_string_view> &s) noexcept(false);
 #endif
+
+/**
+ * Create a padded_string_view from a string. The string will be padded with up to SIMDJSON_PADDING
+ * space characters. The resulting padded_string_view will have a length equal to the original
+ * string, except maybe for trailing white space characters.
+ *
+ * @param s The string.
+ * @return The padded string.
+ */
+inline padded_string_view pad(std::string& s) noexcept;
+
+/**
+ * Create a padded_string_view from a string. The capacity of the string will be padded with SIMDJSON_PADDING
+ * characters. The resulting padded_string_view will have a length equal to the original
+ * string.
+ *
+ * @param s The string.
+ * @return The padded string.
+ */
+inline padded_string_view pad_with_reserve(std::string& s) noexcept;
+
+/**
+ * Return the index-th document-aligned slice of a delimited stream.
+ *
+ * The input is divided into blocks of block_size bytes and each boundary is
+ * moved forward to just past the next delimiter, so a document is never split.
+ * The delimiter must not occur inside a document: a line feed for NDJSON, a
+ * record separator (0x1E) for RFC 7464.
+ *
+ * Slices are contiguous and non-overlapping, and each may be parsed
+ * independently, so callers can process them on as many threads as they like.
+ *
+ * Iterate while index * block_size < data.size(). A slice is empty when its
+ * block falls entirely inside one document, which happens only if that document
+ * is longer than block_size; skip it and continue. With block_size larger than
+ * the longest document, no slice is ever empty.
+ *
+ * @param data       The padded input.
+ * @param delimiter  The byte that separates documents.
+ * @param block_size The nominal slice size, before snapping.
+ * @param index      Which slice to return, counting from zero.
+ */
+inline padded_string_view slice_at(padded_string_view data, char delimiter,
+                                   size_t block_size, size_t index) noexcept;
 
 } // namespace simdjson
 

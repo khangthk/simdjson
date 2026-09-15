@@ -9,6 +9,7 @@
 #endif // SIMDJSON_CONDITIONAL_INCLUDE
 
 #include <algorithm>
+#include <cstring>
 #include <stdexcept>
 
 namespace simdjson {
@@ -95,23 +96,20 @@ simdjson_inline document_stream::document_stream(
   const uint8_t *_buf,
   size_t _len,
   size_t _batch_size,
-  bool _allow_comma_separated
+  bool _allow_comma_separated,
+  stream_format _format
 ) noexcept
   : parser{&_parser},
     buf{_buf},
     len{_len},
     batch_size{_batch_size <= MINIMAL_BATCH_SIZE ? MINIMAL_BATCH_SIZE : _batch_size},
     allow_comma_separated{_allow_comma_separated},
+    format{_format},
     error{SUCCESS}
     #ifdef SIMDJSON_THREADS_ENABLED
     , use_thread(_parser.threaded) // we need to make a copy because _parser.threaded can change
     #endif
 {
-#ifdef SIMDJSON_THREADS_ENABLED
-  if(worker.get() == nullptr) {
-    error = MEMALLOC;
-  }
-#endif
 }
 
 simdjson_inline document_stream::document_stream() noexcept
@@ -120,6 +118,7 @@ simdjson_inline document_stream::document_stream() noexcept
     len{0},
     batch_size{0},
     allow_comma_separated{false},
+    format{stream_format::whitespace_delimited},
     error{UNINITIALIZED}
     #ifdef SIMDJSON_THREADS_ENABLED
     , use_thread(false)
@@ -152,7 +151,6 @@ simdjson_inline document_stream::iterator::iterator(document_stream* _stream, bo
 }
 
 simdjson_inline simdjson_result<ondemand::document_reference> document_stream::iterator::operator*() noexcept {
-  //if(stream->error) { return stream->error; }
   return simdjson_result<ondemand::document_reference>(stream->doc, stream->error);
 }
 
@@ -183,8 +181,17 @@ simdjson_inline document_stream::iterator& document_stream::iterator::operator++
   return *this;
 }
 
+simdjson_inline bool document_stream::iterator::at_end() const noexcept {
+  return finished;
+}
+
+
 simdjson_inline bool document_stream::iterator::operator!=(const document_stream::iterator &other) const noexcept {
   return finished != other.finished;
+}
+
+simdjson_inline bool document_stream::iterator::operator==(const document_stream::iterator &other) const noexcept {
+  return finished == other.finished;
 }
 
 simdjson_inline document_stream::iterator document_stream::begin() noexcept {
@@ -211,13 +218,20 @@ inline void document_stream::start() noexcept {
     error = run_stage1(*parser, batch_start);
   }
   if (error) { return; }
-  doc_index = batch_start;
+  // For json_sequence mode, structural_indexes[0] points to the actual JSON value
+  // after the RS delimiter and any following whitespace. For regular mode, it is
+  // the offset from batch_start to the first document in the batch.
+  doc_index = batch_start + parser->implementation->structural_indexes[0];
   doc = document(json_iterator(&buf[batch_start], parser));
   doc.iter._streaming = true;
 
   #ifdef SIMDJSON_THREADS_ENABLED
   if (use_thread && next_batch_start() < len) {
     // Kick off the first thread on next batch if needed
+    if (worker.get() == nullptr) {
+      worker.reset(new(std::nothrow) stage1_worker());
+      if (worker.get() == nullptr) { error = MEMALLOC; return; }
+    }
     error = stage1_thread_parser.allocate(batch_size);
     if (error) { return; }
     worker->start_thread();
@@ -292,19 +306,79 @@ inline void document_stream::next() noexcept {
        */
 
       if (error) { continue; } // If the error was EMPTY, we may want to load another batch.
-      doc_index = batch_start;
+      doc_index = batch_start + parser->implementation->structural_indexes[0];
     }
   }
 }
 
+simdjson_inline uint8_t document_stream::document_delimiter() const noexcept {
+  switch (format) {
+    case stream_format::newline_delimited: return '\n';
+    case stream_format::json_sequence: return 0x1E;
+    default: return 0;
+  }
+}
+
+simdjson_inline bool document_stream::skip_to_delimiter(uint8_t delimiter) noexcept {
+  const uint8_t *const base = &buf[batch_start];
+  const token_position pos = doc.iter.position();
+  const token_position end = doc.iter.end_position();
+  if (pos >= end) { return false; }
+  const size_t here = size_t(doc.iter.token.peek(pos) - base);
+  const size_t batch_len =
+      (len - batch_start < batch_size) ? len - batch_start : batch_size;
+  if (here >= batch_len) { return false; }
+  const uint8_t *const found = static_cast<const uint8_t *>(
+      std::memchr(base + here, delimiter, batch_len - here));
+  if (found == nullptr) { return false; }
+
+  const uint32_t boundary = uint32_t(found - base);
+  // The answer is near `pos`: the delimiter ends the current document, while
+  // `end` spans the whole batch. Gallop first so the cost follows the distance
+  // rather than the size of the batch.
+  token_position lo = pos;
+  size_t hop = 1;
+  while (lo + hop < end && lo[hop] < boundary) { lo += hop; hop <<= 1; }
+  token_position hi = (lo + hop < end) ? lo + hop : end;
+  while (lo < hi) {
+    const token_position mid = lo + ((hi - lo) >> 1);
+    if (*mid < boundary) { lo = mid + 1; } else { hi = mid; }
+  }
+  doc.iter.token.set_position(lo);
+  return true;
+}
+
 inline void document_stream::next_document() noexcept {
+  // A delimiter that cannot occur inside a document tells us where the current
+  // one ends, so we can jump there instead of walking every structural. Only
+  // valid while the iterator is still inside the document: a consumed document
+  // already sits on the next one's first token, and skip_child() returns at
+  // once for it.
+  //
+  // The jump does not structure-validate the unread remainder of the current
+  // document: under newline_delimited / json_sequence the next delimiter is
+  // assumed to be the true document boundary. Callers that leave depth() > 0
+  // while violating that contract (e.g. pretty multi-line JSON under
+  // newline_delimited) can mis-align following documents; use
+  // whitespace_delimited if unsure.
+  const uint8_t delimiter = document_delimiter();
+  if (delimiter != 0 && !error && doc.iter.depth() > 0 &&
+      skip_to_delimiter(delimiter)) {
+    doc.iter._depth = 1;
+    doc.iter._string_buf_loc = parser->string_buf.get();
+    doc.iter._root = doc.iter.position();
+    return;
+  }
   // Go to next place where depth=0 (document depth)
   error = doc.iter.skip_child(0);
   if (error) { return; }
   // Always set depth=1 at the start of document
   doc.iter._depth = 1;
   // consume comma if comma separated is allowed
-  if (allow_comma_separated) { doc.iter.consume_character(','); }
+  if (allow_comma_separated) {
+    error_code ignored = doc.iter.consume_character(',');
+    static_cast<void>(ignored); // ignored on purpose
+  }
   // Resets the string buffer at the beginning, thus invalidating the strings.
   doc.iter._string_buf_loc = parser->string_buf.get();
   doc.iter._root = doc.iter.position();
@@ -318,10 +392,35 @@ inline error_code document_stream::run_stage1(ondemand::parser &p, size_t _batch
   // This code only updates the structural index in the parser, it does not update any json_iterator
   // instance.
   size_t remaining = len - _batch_start;
+  stage1_mode mode;
   if (remaining <= batch_size) {
-    return p.implementation->stage1(&buf[_batch_start], remaining, stage1_mode::streaming_final);
+    // Final batch
+    switch (format) {
+      case stream_format::json_sequence:
+        mode = stage1_mode::json_sequence_final;
+        break;
+      case stream_format::comma_delimited:
+        mode = stage1_mode::comma_delimited_final;
+        break;
+      default:
+        mode = stage1_mode::streaming_final;
+        break;
+    }
+    return p.implementation->stage1(&buf[_batch_start], remaining, mode);
   } else {
-    return p.implementation->stage1(&buf[_batch_start], batch_size, stage1_mode::streaming_partial);
+    // Partial batch
+    switch (format) {
+      case stream_format::json_sequence:
+        mode = stage1_mode::json_sequence_partial;
+        break;
+      case stream_format::comma_delimited:
+        mode = stage1_mode::comma_delimited_partial;
+        break;
+      default:
+        mode = stage1_mode::streaming_partial;
+        break;
+    }
+    return p.implementation->stage1(&buf[_batch_start], batch_size, mode);
   }
 }
 
@@ -342,14 +441,21 @@ simdjson_inline std::string_view document_stream::iterator::source() const noexc
         depth--;
         break;
       default:    // Scalar value document
-        // TODO: We could remove trailing whitespaces
         // This returns a string spanning from start of value to the beginning of the next document (excluded)
         {
-          auto next_index = stream->parser->implementation->structural_indexes[++cur_struct_index];
+          auto next_index = stream->batch_start + stream->parser->implementation->structural_indexes[++cur_struct_index];
           // normally the length would be next_index - current_index() - 1, except for the last document
           size_t svlen = next_index - current_index();
           const char *start = reinterpret_cast<const char*>(stream->buf) + current_index();
-          while(svlen > 1 && (std::isspace(start[svlen-1]) || start[svlen-1] == '\0')) {
+          // Trim trailing whitespace, NUL, and RS (0x1E). In RFC 7464
+          // json_sequence mode the scanner classifies RS as a scalar
+          // character, so an RS-prefixed scalar document (number / true /
+          // false / null / string) has no closing structural index and the
+          // slice runs all the way up to the next document's RS. RS cannot
+          // legally appear in a JSON value at the source level (control
+          // characters in strings must be escaped as \u001E), so stripping
+          // it is safe in every stream_format.
+          while(svlen > 1 && (std::isspace(static_cast<unsigned char>(start[svlen-1])) || start[svlen-1] == '\0' || static_cast<uint8_t>(start[svlen-1]) == 0x1E || (stream->format == stream_format::comma_delimited && start[svlen-1] == ','))) {
             svlen--;
           }
           return std::string_view(start, svlen);

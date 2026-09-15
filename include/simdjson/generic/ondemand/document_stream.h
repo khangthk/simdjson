@@ -81,7 +81,7 @@ public:
   /**
    * Construct an uninitialized document_stream.
    *
-   *  ```c++
+   *  ```cpp
    *  document_stream docs;
    *  auto error = parser.iterate_many(json).get(docs);
    *  ```
@@ -116,6 +116,16 @@ public:
    *   }
    *   size_t truncated = stream.truncated_bytes();
    *
+   * IMPORTANT: this value is only meaningful under the conditions below.
+   *
+   *   - the format is whitespace_delimited or newline_delimited;
+   *   - you iterated all the way to the end of the stream;
+   *   - no document reported an error. Iteration stops at the first failed
+   *     document, which can leave the bookkeeping from a mid-stream batch.
+   *
+   * If you need to know about a truncated tail outside those conditions, track
+   * it yourself from the last successful document (see iterator::current_index()
+   * and iterator::source()).
    */
   inline size_t truncated_bytes() const noexcept;
 
@@ -131,6 +141,7 @@ public:
      * Default constructor.
      */
     simdjson_inline iterator() noexcept;
+    simdjson_inline iterator(const iterator &other) noexcept = default;
     /**
      * Get the current document (or error).
      */
@@ -144,6 +155,7 @@ public:
      * @param other the end iterator to compare to.
      */
     simdjson_inline bool operator!=(const iterator &other) const noexcept;
+    simdjson_inline bool operator==(const iterator &other) const noexcept;
     /**
      * @private
      *
@@ -187,6 +199,11 @@ public:
      */
      inline error_code error() const noexcept;
 
+     /**
+      * Returns whether the iterator is at the end.
+      */
+     inline bool at_end() const noexcept;
+
   private:
     simdjson_inline iterator(document_stream *s, bool finished) noexcept;
     /** The document_stream we're iterating through. */
@@ -198,6 +215,7 @@ public:
     friend class document_stream;
     friend class json_iterator;
   };
+  using iterator = document_stream::iterator;
 
   /**
    * Start iterating the documents in the stream.
@@ -221,13 +239,16 @@ private:
    * @param buf is the raw byte buffer we need to process
    * @param len is the length of the raw byte buffer in bytes
    * @param batch_size is the size of the windows (must be strictly greater or equal to the largest JSON document)
+   * @param allow_comma_separated whether to allow comma-separated documents
+   * @param format the stream format
    */
   simdjson_inline document_stream(
     ondemand::parser &parser,
     const uint8_t *buf,
     size_t len,
     size_t batch_size,
-    bool allow_comma_separated
+    bool allow_comma_separated,
+    stream_format format = stream_format::whitespace_delimited
   ) noexcept;
 
   /**
@@ -261,8 +282,23 @@ private:
    */
   inline void next() noexcept;
 
-  /** Move the json_iterator of the document to the location of the next document in the stream. */
+  /**
+   * Move the json_iterator of the document to the location of the next document
+   * in the stream.
+   *
+   * For formats with a document delimiter (`newline_delimited`, `json_sequence`),
+   * when the iterator is still inside the current document (`depth() > 0`), this
+   * may jump to the next delimiter instead of walking remaining structurals. That
+   * jump does not structure-validate the unread remainder.
+   */
   inline void next_document() noexcept;
+  /** Byte that ends a document under `format`, or 0 if there is none. */
+  simdjson_inline uint8_t document_delimiter() const noexcept;
+  /**
+   * Position the iterator at the first structural at or past the next
+   * `delimiter` in the current batch. Returns false if none is found.
+   */
+  simdjson_inline bool skip_to_delimiter(uint8_t delimiter) noexcept;
 
   /** Get the next document index. */
   inline size_t next_batch_start() const noexcept;
@@ -276,6 +312,7 @@ private:
   size_t len;
   size_t batch_size;
   bool allow_comma_separated;
+  stream_format format;
   /**
    * We are going to use just one document instance. The document owns
    * the json_iterator. It implies that we only ever pass a reference
@@ -302,7 +339,7 @@ private:
   /** The error returned from the stage 1 thread. */
   error_code stage1_thread_error{UNINITIALIZED};
   /** The thread used to run stage 1 against the next batch in the background. */
-  std::unique_ptr<stage1_worker> worker{new(std::nothrow) stage1_worker()};
+  std::unique_ptr<stage1_worker> worker{};
   /**
    * The parser used to run stage 1 in the background. Will be swapped
    * with the regular parser when finished.

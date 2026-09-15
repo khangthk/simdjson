@@ -129,6 +129,47 @@ namespace json_path_tests {
         TEST_SUCCEED();
     }
 
+    // A key longer than SIMDJSON_PADDING must not be compared past the quote
+    // that terminates the key in the document.
+    bool long_key() {
+        TEST_START();
+        ondemand::parser parser;
+        ondemand::document doc;
+        ondemand::value val;
+
+        // The key "aaa" ends at offset 5, so a target that keeps matching the
+        // bytes that follow it runs into the padding and then out of the buffer.
+        auto small_json = R"({"aaa":1})"_padded;
+        std::string overrun("aaa\":1}");
+        overrun.append(SIMDJSON_PADDING, '\0');
+        ASSERT_SUCCESS(parser.iterate(small_json).get(doc));
+        ASSERT_ERROR(doc.at_path("." + overrun).get(val), NO_SUCH_FIELD);
+
+        // Matching keys longer than SIMDJSON_PADDING still resolve.
+        const std::string long_name(SIMDJSON_PADDING + 16, 'k');
+        auto long_json = padded_string(R"({")" + long_name + R"(":42})");
+        uint64_t number;
+        ASSERT_SUCCESS(parser.iterate(long_json).get(doc));
+        ASSERT_SUCCESS(doc.at_path("." + long_name).get(val));
+        ASSERT_SUCCESS(val.get_uint64().get(number));
+        ASSERT_EQUAL(number, 42);
+
+        // A target that is a prefix of the key, or an extension of it, does not.
+        ASSERT_SUCCESS(parser.iterate(long_json).get(doc));
+        ASSERT_ERROR(doc.at_path("." + long_name.substr(1)).get(val), NO_SUCH_FIELD);
+        ASSERT_SUCCESS(parser.iterate(long_json).get(doc));
+        ASSERT_ERROR(doc.at_path("." + long_name + "k").get(val), NO_SUCH_FIELD);
+
+        // An escaped quote inside a long key is part of the key, not its end.
+        const std::string escaped_name = long_name + R"(\")";
+        auto escaped_json = padded_string(R"({")" + escaped_name + R"(":7})");
+        ASSERT_SUCCESS(parser.iterate(escaped_json).get(doc));
+        ASSERT_SUCCESS(doc.at_path("." + escaped_name).get(val));
+        ASSERT_SUCCESS(val.get_uint64().get(number));
+        ASSERT_EQUAL(number, 7);
+        TEST_SUCCEED();
+    }
+
     bool document_as_scalar() {
         TEST_START();
         auto number_json = R"( 1 )"_padded;
@@ -243,6 +284,28 @@ namespace json_path_tests {
         TEST_SUCCEED();
     }
 
+#ifdef SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON
+    bool incomplete_string_value_with_allow_incomplete_json() {
+        TEST_START();
+        ondemand::parser parser;
+        ondemand::document doc;
+        std::string_view val;
+
+        auto incomplete_string_value = R"({"key":")"_padded;
+        auto complete_string_before_incomplete_value = R"({"key":"ok","incomplete":")"_padded;
+
+        ASSERT_SUCCESS(parser.iterate_allow_incomplete_json(incomplete_string_value).get(doc));
+        ASSERT_ERROR(doc.at_path(".key").get_string().get(val), simdjson::STRING_ERROR);
+
+        ASSERT_SUCCESS(parser.iterate_allow_incomplete_json(complete_string_before_incomplete_value).get(doc));
+        ASSERT_SUCCESS(doc.at_path(".key").get_string().get(val));
+        ASSERT_EQUAL(val, "ok");
+
+        ASSERT_SUCCESS(parser.iterate_allow_incomplete_json(complete_string_before_incomplete_value).get(doc));
+        ASSERT_ERROR(doc.at_path(".incomplete").get_string().get(val), simdjson::STRING_ERROR);
+        TEST_SUCCEED();
+    }
+#endif
 
     bool many_json_paths_object_array() {
         TEST_START();
@@ -346,6 +409,54 @@ namespace json_path_tests {
         TEST_SUCCEED();
     }
 
+    bool many_json_paths_with_prefix() {
+        TEST_START();
+        // object
+        {
+            auto cfoofoo2 = R"( { "c" :{ "foo": { "a": [ 10, 20, 30 ] }}, "d": { "foo2": { "a": [ 10, 20, 30 ] }} , "e": 120 })"_padded;
+            ondemand::parser parser;
+            ondemand::document doc;
+            ASSERT_SUCCESS(parser.iterate(cfoofoo2).get(doc));
+            ondemand::object obj;
+            ASSERT_SUCCESS(doc.get_object().get(obj));
+            int64_t x;
+            ASSERT_SUCCESS(obj.at_path("$.c.foo.a[1]").get(x));
+            ASSERT_EQUAL(x, 20);
+            ASSERT_SUCCESS(obj.at_path("$.d.foo2.a.2").get(x));
+            ASSERT_EQUAL(x, 30);
+            ASSERT_SUCCESS(obj.at_path("$.e").get(x));
+            ASSERT_EQUAL(x, 120);
+        }
+        // array
+        {
+            auto cfoofoo2 = R"( [ 111, 2, 3, { "foo": { "a": [ 10, 20, 33 ] }}, { "foo2": { "a": [ 10, 20, 30 ] }}, 1001 ])"_padded;
+            ondemand::parser parser;
+            ondemand::document doc;
+            ASSERT_SUCCESS(parser.iterate(cfoofoo2).get(doc));
+            ondemand::array arr;
+            ASSERT_SUCCESS(doc.get_array().get(arr));
+            int64_t x;
+            ASSERT_SUCCESS(arr.at_path("$[3].foo.a[1]").get(x));
+            ASSERT_EQUAL(x, 20);
+        }
+        // onject array
+        {
+            auto dogcatpotato = R"( { "dog" : [1,2,3], "cat" : [5, 6, 7], "potato" : [1234]})"_padded;
+
+            ondemand::parser parser;
+            ondemand::document doc;
+            ASSERT_SUCCESS(parser.iterate(dogcatpotato).get(doc));
+            ondemand::object obj;
+            ASSERT_SUCCESS(doc.get_object().get(obj));
+            int64_t x;
+            ASSERT_SUCCESS(obj.at_path("$.dog[1]").get(x));
+            ASSERT_EQUAL(x, 2);
+            ASSERT_SUCCESS(obj.at_path("$.potato[0]").get(x));
+            ASSERT_EQUAL(x, 1234);
+        }
+        TEST_SUCCEED();
+    }
+
 #if SIMDJSON_EXCEPTIONS
     bool json_path_invalidation_exceptions() {
         TEST_START();
@@ -392,7 +503,11 @@ namespace json_path_tests {
                 many_json_paths_array() &&
                 many_json_paths_object() &&
                 many_json_paths_object_array() &&
+                many_json_paths_with_prefix() &&
                 run_broken_tests() &&
+#ifdef SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON
+                incomplete_string_value_with_allow_incomplete_json() &&
+#endif
                 json_path_invalidation() &&
                 demo_test() &&
                 demo_relative_path() &&
@@ -482,6 +597,7 @@ namespace json_path_tests {
                 run_failure_test(TEST_JSON, "./~01abc.-", INDEX_OUT_OF_BOUNDS) &&
                 many_json_paths() &&
                 document_as_scalar() &&
+                long_key() &&
                 true;
     }
 }   // json_path_tests

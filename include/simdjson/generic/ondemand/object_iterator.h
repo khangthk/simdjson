@@ -20,6 +20,15 @@ public:
    */
   simdjson_inline object_iterator() noexcept = default;
 
+#if SIMDJSON_DEVELOPMENT_CHECKS
+   simdjson_inline ~object_iterator() noexcept;
+
+   simdjson_inline object_iterator(object_iterator&&) noexcept;
+   simdjson_inline object_iterator& operator=(object_iterator&&) noexcept;
+   simdjson_inline object_iterator(const object_iterator&) noexcept;
+   simdjson_inline object_iterator& operator=(const object_iterator&) noexcept;
+#endif
+
   //
   // Iterator interface
   //
@@ -32,9 +41,17 @@ public:
   // Assumes it's being compared with the end. true if depth >= iter->depth.
   simdjson_inline bool operator!=(const object_iterator &) const noexcept;
   // Checks for ']' and ','
+  // YOU MUST NOT CALL THIS IF operator* YIELDED AN ERROR.
+  // YOU MUST NOT CALL THIS WITHOUT A CORRESPONDING operator* CALL.
   simdjson_inline object_iterator &operator++() noexcept;
 
 private:
+#if SIMDJSON_DEVELOPMENT_CHECKS
+   bool has_been_referenced{false};
+   object* parent{nullptr};
+
+   simdjson_inline object_iterator(const value_iterator &_iter, object* _parent) noexcept;
+#endif
   /**
    * The underlying JSON iterator.
    *

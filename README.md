@@ -1,14 +1,13 @@
+[![][license img]][license] [![][licensemit img]][licensemit]
 
-[![Ubuntu 20.04 CI](https://github.com/simdjson/simdjson/workflows/Ubuntu%2020.04%20CI%20(GCC%209)/badge.svg)](https://simdjson.org/plots.html)
-[![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/simdjson.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:simdjson)
-[![][license img]][license]
 
 [![Doxygen Documentation](https://img.shields.io/badge/docs-doxygen-green.svg)](https://simdjson.github.io/simdjson/)
 
 simdjson : Parsing gigabytes of JSON per second
 ===============================================
 
-<img src="images/logo.png" width="10%" style="float: right">
+<img src="images/official_logo/logo_noir/SVG/logo_simdjson_noir.svg" width="40%" style="float: right">
+
 JSON is everywhere on the Internet. Servers spend a *lot* of time parsing it. We need a fresh
 approach. The simdjson library uses commonly available SIMD instructions and microparallel algorithms
 to parse JSON 4x  faster than RapidJSON and 25x faster than JSON for Modern C++.
@@ -31,6 +30,7 @@ Table of Contents
 * [Documentation](#documentation)
 * [Godbolt](#godbolt)
 * [Performance results](#performance-results)
+* [Packages](#packages)
 * [Bindings and Ports of simdjson](#bindings-and-ports-of-simdjson)
 * [About simdjson](#about-simdjson)
 * [Funding](#funding)
@@ -55,14 +55,23 @@ Real-world usage
 - [WatermelonDB](https://github.com/Nozbe/WatermelonDB)
 - [Apache Doris](https://github.com/apache/doris)
 - [Dgraph](https://github.com/dgraph-io/dgraph)
-- [UJRPC](https://github.com/unum-cloud/ujrpc)
+- [UCall](https://github.com/unum-cloud/UCall)
 - [fastgltf](https://github.com/spnda/fastgltf)
-- [vast](https://github.com/tenzir/vast)
+- [tenzir](https://github.com/tenzir/tenzir)
 - [ada-url](https://github.com/ada-url/ada)
 - [fastgron](https://github.com/adamritter/fastgron)
 - [WasmEdge](https://wasmedge.org)
+- [RonDB](https://github.com/logicalclocks/rondb)
+- [GreptimeDB](https://github.com/GreptimeTeam/greptimedb)
+- [mamba](https://github.com/mamba-org/mamba)
+- [Ladybird Browser](https://ladybird.org)
+- [SereneDB](https://github.com/serenedb/serenedb)
+
 
 If you are planning to use simdjson in a product, please work from one of our releases.
+
+
+
 
 Quick Start
 -----------
@@ -80,7 +89,7 @@ The simdjson library is easily consumable with a single .h and .cpp file.
    ```
 2. Create `quickstart.cpp`:
 
-```c++
+```cpp
 #include <iostream>
 #include "simdjson.h"
 using namespace simdjson;
@@ -105,15 +114,19 @@ Documentation
 Usage documentation is available:
 
 * [Basics](doc/basics.md) is an overview of how to use simdjson and its APIs.
+* [Builder](doc/builder.md) is an overview of how to efficiently write JSON strings using simdjson.
 * [Performance](doc/performance.md) shows some more advanced scenarios and how to tune for them.
 * [Implementation Selection](doc/implementation-selection.md) describes runtime CPU detection and
   how you can work with it.
 * [API](https://simdjson.github.io/simdjson/) contains the automatically generated API documentation.
+* [Compile-Time Parsing](doc/compile_time.md) presents our compile-time parsing function (C++26 only).
+
 
 Godbolt
 -------------
 
 Some users may want to browse code along with the compiled assembly. You want to check out the following lists of examples:
+* [C++26 reflection example](https://godbolt.org/z/K3Px64TqK)
 * [simdjson examples with errors handled through exceptions](https://godbolt.org/z/7G5qE4sr9)
 * [simdjson examples with errors without exceptions](https://godbolt.org/z/e9dWb9E4v)
 
@@ -143,6 +156,9 @@ speed for [synthetic files over various sizes generated with a script](https://g
 For NDJSON files, we can exceed 3 GB/s with [our  multithreaded parsing functions](https://github.com/simdjson/simdjson/blob/master/doc/parse_many.md).
 
 
+Packages
+------------------------------
+[![Packaging status](https://repology.org/badge/vertical-allrepos/simdjson.svg)](https://repology.org/project/simdjson/versions)
 
 
 Bindings and Ports of simdjson
@@ -167,11 +183,14 @@ We distinguish between "bindings" (which just wrap the C++ code) and a port to a
 - [simdjsone](https://github.com/saleyn/simdjsone): erlang bindings.
 - [lua-simdjson](https://github.com/FourierTransformer/lua-simdjson): lua bindings.
 - [hermes-json](https://hackage.haskell.org/package/hermes-json): haskell bindings.
-- [simdjzon](https://github.com/travisstaloch/simdjzon): zig port.
+- [zimdjson](https://github.com/EzequielRamis/zimdjson): Zig port.
+- [simdjzon](https://github.com/travisstaloch/simdjzon): Zig port.
 - [JSON-Simd](https://github.com/rawleyfowler/JSON-simd): Raku bindings.
 - [JSON::SIMD](https://metacpan.org/pod/JSON::SIMD): Perl bindings; fully-featured JSON module that uses simdjson for decoding.
 - [gemmaJSON](https://github.com/sainttttt/gemmaJSON): Nim JSON parser based on simdjson bindings.
 - [simdjson-java](https://github.com/simdjson/simdjson-java): Java port.
+- [mruby-fast-json](https://github.com/Asmod4n/mruby-fast-json): mruby binding with high API coverage.
+- [simdjson-dart](https://github.com/xaldarof/simdjson-dart): Dart bindings for the simdjson project.
 
 About simdjson
 --------------
@@ -182,7 +201,7 @@ CPU's multiple execution cores.
 
 Our default front-end is called On-Demand, and we wrote a paper about it:
 
-- John Keiser, Daniel Lemire, [On-Demand JSON: A Better Way to Parse Documents?](http://arxiv.org/abs/2312.17149), Software: Practice and Experience 54 (6), 2024.
+- John Keiser, Daniel Lemire, [On-Demand JSON: A Better Way to Parse Documents?](https://arxiv.org/abs/2312.17149), Software: Practice and Experience 54 (6), 2024.
 
 Some people [enjoy reading the first (2019) simdjson paper](https://arxiv.org/abs/1902.08318): A description of the design
 and implementation of simdjson is in our research article:
@@ -194,9 +213,30 @@ We have an in-depth paper focused on the UTF-8 validation:
 
 We also have an informal [blog post providing some background and context](https://branchfree.org/2019/02/25/paper-parsing-gigabytes-of-json-per-second/).
 
-For the video inclined, <br />
-[![simdjson at QCon San Francisco 2019](http://img.youtube.com/vi/wlvKAT7SZIQ/0.jpg)](http://www.youtube.com/watch?v=wlvKAT7SZIQ)<br />
+For the video inclined, we had a talk at QCon San Francisco 2019<br />
+[![simdjson at QCon San Francisco 2019](https://img.youtube.com/vi/wlvKAT7SZIQ/0.jpg)](https://www.youtube.com/watch?v=wlvKAT7SZIQ)<br />
 (It was the best voted talk, we're kinda proud of it.)
+
+We also had a CppCon 2025 talk. We show how C++26 reflection allows for one-line serialization (to_json(player)) or deserialization—without invasive macros or manual mapping—using nothing but the C++ standard library. Whether you’re a performance junkie or simply interested in the roadmap for the next decade of C++ development, watch our full talk!
+
+[![simdjson at CppCon 2025](https://img.youtube.com/vi/Mcgk3CxHYMs/0.jpg)](https://www.youtube.com/watch?v=Mcgk3CxHYMs)<br />
+
+
+
+Citing this work
+-----------------
+
+If you use simdjson in published research, please cite the software library. A suitable BibTeX entry is:
+
+```bibtex
+@misc{simdjson,
+  title={{The simdjson library: Parsing Gigabytes of JSON per Second}},
+  author={Daniel Lemire and Geoff Langdale and John Keiser and Paul Dreik and Francisco Thiesen and others},
+  year={2019},
+  howpublished={Software library},
+  note={https://github.com/simdjson/simdjson}
+}
+```
 
 Funding
 -------
@@ -207,21 +247,27 @@ RGPIN-2017-03910 and RGPIN-2024-03787.
 [license]: LICENSE
 [license img]: https://img.shields.io/badge/License-Apache%202-blue.svg
 
+
+[licensemit]: LICENSE-MIT
+[licensemit img]: https://img.shields.io/badge/License-MIT-blue.svg
+
+
 Contributing to simdjson
 ------------------------
 
 Head over to [CONTRIBUTING.md](CONTRIBUTING.md) for information on contributing to simdjson, and
 [HACKING.md](HACKING.md) for information on source, building, and architecture/design.
 
+
 License
 -------
 
-This code is made available under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0.html).
+This code is made available under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0.html) as well as under the MIT License. As a user, you can pick the license you prefer.
 
 Under Windows, we build some tools using the windows/dirent_portable.h file (which is outside our library code): it is under the liberal (business-friendly) MIT license.
 
-For compilers that do not support [C++17](https://en.wikipedia.org/wiki/C%2B%2B17), we bundle the string-view library which is published under the [Boost license](http://www.boost.org/LICENSE_1_0.txt). Like the Apache license, the Boost license is a permissive license allowing commercial redistribution.
+For compilers that do not support [C++17](https://en.wikipedia.org/wiki/C%2B%2B17), we bundle the string-view library which is published under the [Boost license](https://www.boost.org/LICENSE_1_0.txt). Like the Apache license, the Boost license is a permissive license allowing commercial redistribution.
 
-For efficient number serialization, we bundle Florian Loitsch's implementation of the Grisu2 algorithm for binary to decimal floating-point numbers. The implementation was slightly modified by JSON for Modern C++ library. Both Florian Loitsch's implementation and JSON for Modern C++ are provided under the MIT license.
+For efficient number serialization, we bundle Junekey Jeon's implementation of the Dragonbox algorithm for binary to decimal floating-point numbers (https://github.com/jk-jeon/dragonbox). The Dragonbox implementation is provided under the Apache License Version 2.0 with LLVM Exceptions (LICENSE-Apache2-LLVM or https://llvm.org/foundation/relicensing/LICENSE.txt) or the Boost Software License Version 1.0 (LICENSE-Boost or https://www.boost.org/LICENSE_1_0.txt).
 
 For runtime dispatching, we use some code from the PyTorch project licensed under 3-clause BSD.

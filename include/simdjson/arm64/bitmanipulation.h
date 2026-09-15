@@ -19,7 +19,7 @@ SIMDJSON_NO_SANITIZE_UNDEFINED
 // See issue https://github.com/simdjson/simdjson/issues/1965
 SIMDJSON_NO_SANITIZE_MEMORY
 simdjson_inline int trailing_zeroes(uint64_t input_num) {
-#ifdef SIMDJSON_REGULAR_VISUAL_STUDIO
+#if SIMDJSON_REGULAR_VISUAL_STUDIO
   unsigned long ret;
   // Search the mask data from least significant bit (LSB)
   // to the most significant bit (MSB) for a set bit (1).
@@ -43,7 +43,7 @@ simdjson_inline uint64_t clear_lowest_bit(uint64_t input_num) {
 SIMDJSON_NO_SANITIZE_UNDEFINED
 /* result might be undefined when input_num is zero */
 simdjson_inline int leading_zeroes(uint64_t input_num) {
-#ifdef SIMDJSON_REGULAR_VISUAL_STUDIO
+#if SIMDJSON_REGULAR_VISUAL_STUDIO
   unsigned long leading_zero = 0;
   // Search the mask data from most significant bit (MSB)
   // to least significant bit (LSB) for a set bit (1).
@@ -58,7 +58,14 @@ simdjson_inline int leading_zeroes(uint64_t input_num) {
 
 /* result might be undefined when input_num is zero */
 simdjson_inline int count_ones(uint64_t input_num) {
+#if SIMDJSON_REGULAR_VISUAL_STUDIO
    return vaddv_u8(vcnt_u8(vcreate_u8(input_num)));
+#else
+   // if the system supports SVE or CSSC, __builtin_popcountll
+   // might be compiled to fewer single instructions. For CSSC,
+   // __builtin_popcountll is compiled to a single instruction.
+   return __builtin_popcountll(input_num);
+#endif// SIMDJSON_REGULAR_VISUAL_STUDIO
 }
 
 
@@ -95,15 +102,6 @@ simdjson_inline uint64_t zero_leading_bit(uint64_t rev_bits, int leading_zeroes)
 
 #endif
 
-simdjson_inline bool add_overflow(uint64_t value1, uint64_t value2, uint64_t *result) {
-#ifdef SIMDJSON_REGULAR_VISUAL_STUDIO
-  *result = value1 + value2;
-  return *result < value1;
-#else
-  return __builtin_uaddll_overflow(value1, value2,
-                                   reinterpret_cast<unsigned long long *>(result));
-#endif
-}
 
 } // unnamed namespace
 } // namespace arm64

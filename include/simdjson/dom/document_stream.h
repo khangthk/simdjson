@@ -74,7 +74,7 @@ public:
   /**
    * Construct an uninitialized document_stream.
    *
-   *  ```c++
+   *  ```cpp
    *  document_stream docs;
    *  error = parser.parse_many(json).get(docs);
    *  ```
@@ -107,6 +107,23 @@ public:
    *   }
    *   size_t truncated = stream.truncated_bytes();
    *
+   * IMPORTANT: this value is only meaningful under the conditions below. It is
+   * computed from stage-1 bookkeeping that the other stream formats do not
+   * maintain, and outside these conditions it is not merely imprecise, it is
+   * arbitrary -- it can exceed size_in_bytes() or wrap around to a huge value.
+   * Check it only when all of the following hold:
+   *
+   *   - the format is whitespace_delimited or newline_delimited. In
+   *     json_sequence and comma_delimited mode the stage-1 filter rewrites the
+   *     structural index in place and the bookkeeping is lost, so the value is
+   *     meaningless even for a stream that parsed completely;
+   *   - you iterated all the way to the end of the stream;
+   *   - no document reported an error. Iteration stops at the first failed
+   *     document, which can leave the bookkeeping from a mid-stream batch.
+   *
+   * If you need to know about a truncated tail outside those conditions, track
+   * it yourself from the last successful document (see iterator::current_index()
+   * and iterator::source()).
    */
   inline size_t truncated_bytes() const noexcept;
   /**
@@ -206,12 +223,14 @@ private:
    * @param buf is the raw byte buffer we need to process
    * @param len is the length of the raw byte buffer in bytes
    * @param batch_size is the size of the windows (must be strictly greater or equal to the largest JSON document)
+   * @param format is the stream format
    */
   simdjson_inline document_stream(
     dom::parser &parser,
     const uint8_t *buf,
     size_t len,
-    size_t batch_size
+    size_t batch_size,
+    stream_format format = stream_format::whitespace_delimited
   ) noexcept;
 
   /**
@@ -261,6 +280,8 @@ private:
   const uint8_t *buf;
   size_t len;
   size_t batch_size;
+  /** The stream format. */
+  stream_format format;
   /** The error (or lack thereof) from the current document. */
   error_code error;
   size_t batch_start{0};

@@ -24,6 +24,9 @@ simdjson_inline json_iterator::json_iterator(json_iterator &&other) noexcept
     _depth{other._depth},
     _root{other._root},
     _streaming{other._streaming}
+#ifdef SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON
+    , _allow_incomplete_json{other._allow_incomplete_json}
+#endif
 {
   other.parser = nullptr;
 }
@@ -35,6 +38,9 @@ simdjson_inline json_iterator &json_iterator::operator=(json_iterator &&other) n
   _depth = other._depth;
   _root = other._root;
   _streaming = other._streaming;
+#ifdef SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON
+  _allow_incomplete_json = other._allow_incomplete_json;
+#endif
   other.parser = nullptr;
   return *this;
 }
@@ -61,7 +67,8 @@ simdjson_inline json_iterator::json_iterator(const uint8_t *buf, ondemand::parse
       _string_buf_loc{parser->string_buf.get()},
       _depth{1},
       _root{parser->implementation->structural_indexes.get()},
-      _streaming{streaming}
+      _streaming{streaming},
+      _allow_incomplete_json{true}
 
 {
   logger::log_headers();
@@ -193,6 +200,17 @@ simdjson_inline bool json_iterator::streaming() const noexcept {
   return _streaming;
 }
 
+#ifdef SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON
+simdjson_inline bool json_iterator::allow_incomplete_json() const noexcept {
+  return _allow_incomplete_json;
+}
+
+simdjson_inline size_t json_iterator::remaining_input_length(const uint8_t *json) const noexcept {
+  const uint8_t *end = token.buf + parser->_document_len;
+  return json < end ? size_t(end - json) : 0;
+}
+#endif // SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON
+
 simdjson_inline token_position json_iterator::root_position() const noexcept {
   return _root;
 }
@@ -215,6 +233,7 @@ simdjson_inline void json_iterator::assert_more_tokens(uint32_t required_tokens)
 }
 
 simdjson_inline void json_iterator::assert_valid_position(token_position position) const noexcept {
+  (void)position; // Suppress unused parameter warning
 #ifndef SIMDJSON_CLANG_VISUAL_STUDIO
   SIMDJSON_ASSUME( position >= &parser->implementation->structural_indexes[0] );
   SIMDJSON_ASSUME( position < &parser->implementation->structural_indexes[parser->implementation->n_structural_indexes] );
@@ -342,7 +361,7 @@ simdjson_inline uint8_t *&json_iterator::string_buf_loc() noexcept {
   return _string_buf_loc;
 }
 
-simdjson_inline error_code json_iterator::report_error(error_code _error, const char *message) noexcept {
+simdjson_warn_unused simdjson_inline error_code json_iterator::report_error(error_code _error, const char *message) noexcept {
   SIMDJSON_ASSUME(_error != SUCCESS && _error != UNINITIALIZED && _error != INCORRECT_TYPE && _error != NO_SUCH_FIELD);
   logger::log_error(*this, message);
   error = _error;
@@ -356,7 +375,11 @@ simdjson_inline token_position json_iterator::position() const noexcept {
 simdjson_inline simdjson_result<std::string_view> json_iterator::unescape(raw_json_string in, bool allow_replacement) noexcept {
 #if SIMDJSON_DEVELOPMENT_CHECKS
   auto result = parser->unescape(in, _string_buf_loc, allow_replacement);
+#if !defined(SIMDJSON_VISUAL_STUDIO) && !defined(SIMDJSON_CLANG_VISUAL_STUDIO)
+  // Under Visual Studio, the next SIMDJSON_ASSUME fails with: the argument
+  // has side effects that will be discarded.
   SIMDJSON_ASSUME(!parser->string_buffer_overflow(_string_buf_loc));
+#endif // !defined(SIMDJSON_VISUAL_STUDIO) && !defined(SIMDJSON_CLANG_VISUAL_STUDIO)
   return result;
 #else
   return parser->unescape(in, _string_buf_loc, allow_replacement);
@@ -366,7 +389,11 @@ simdjson_inline simdjson_result<std::string_view> json_iterator::unescape(raw_js
 simdjson_inline simdjson_result<std::string_view> json_iterator::unescape_wobbly(raw_json_string in) noexcept {
 #if SIMDJSON_DEVELOPMENT_CHECKS
   auto result = parser->unescape_wobbly(in, _string_buf_loc);
+#if !defined(SIMDJSON_VISUAL_STUDIO) && !defined(SIMDJSON_CLANG_VISUAL_STUDIO)
+  // Under Visual Studio, the next SIMDJSON_ASSUME fails with: the argument
+  // has side effects that will be discarded.
   SIMDJSON_ASSUME(!parser->string_buffer_overflow(_string_buf_loc));
+#endif // !defined(SIMDJSON_VISUAL_STUDIO) && !defined(SIMDJSON_CLANG_VISUAL_STUDIO)
   return result;
 #else
   return parser->unescape_wobbly(in, _string_buf_loc);
@@ -386,7 +413,7 @@ simdjson_inline void json_iterator::reenter_child(token_position position, depth
   _depth = child_depth;
 }
 
-simdjson_inline error_code json_iterator::consume_character(char c) noexcept {
+simdjson_warn_unused simdjson_inline error_code json_iterator::consume_character(char c) noexcept {
   if (*peek() == c) {
     return_current_and_advance();
     return SUCCESS;
@@ -409,7 +436,7 @@ simdjson_inline void json_iterator::set_start_position(depth_t depth, token_posi
 #endif
 
 
-simdjson_inline error_code json_iterator::optional_error(error_code _error, const char *message) noexcept {
+simdjson_warn_unused simdjson_inline error_code json_iterator::optional_error(error_code _error, const char *message) noexcept {
   SIMDJSON_ASSUME(_error == INCORRECT_TYPE || _error == NO_SUCH_FIELD);
   logger::log_error(*this, message);
   return _error;
